@@ -2,7 +2,7 @@
 # gst-alphamask
 
 gst-alphamask is a plugin to combine a video stream with an alpha mask stream to
-produce a single video stream in AYUV or A420 formats.
+produce a single video stream in A420, ARGB or AYUV formats.
 
 
 It requires:

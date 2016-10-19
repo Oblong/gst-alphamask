@@ -17,6 +17,23 @@
  * Boston, MA 02110-1301, USA.
  */
 
+/**
+ * SECTION:element-alphamask
+ *
+ * The alphamask element combines a video and an alpha stream to produce
+ * transparent videos in A420, ARGB or AYUV formats. The alpha channel is
+ * made by reinterpreting a GRAY8 auxiliary video stream as an alpha mask.
+ *
+ * Sample pipeline:
+ * |[
+ * gst-launch-1.0 videotestsrc pattern=2 ! queue ! mixer.sink_0 \
+ *   videotestsrc pattern=18 ! queue ! am.alpha_sink \
+ *   videotestsrc ! queue ! alphamask name=am ! queue ! mixer.sink_1 \
+ *   videomixer name=mixer sink_0::zorder=0 sink_1::zorder=1 ! queue ! \
+ *   glimagesink
+ * ]|
+ */
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
