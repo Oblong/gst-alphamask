@@ -75,7 +75,7 @@ static GstStaticPadTemplate asink_factory =
 GST_STATIC_PAD_TEMPLATE ("alpha_sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("{ GRAY8 }"))
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("{ GRAY8, I420, NV12, NV21 }"))
     );
 
 static GstStaticPadTemplate src_factory =
@@ -250,7 +250,7 @@ gst_alpha_mask_convert (GstAlphaMask * thiz, GstBuffer * ibuf)
       GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
 
   /* Convert the frame into output format */
-  if (!gst_video_frame_map (&iframe, &thiz->iinfo, ibuf, GST_MAP_READWRITE))
+  if (!gst_video_frame_map (&iframe, &thiz->iinfo, ibuf, GST_MAP_READ))
     goto invalid_in_frame;
 
   if (!gst_video_frame_map (&oframe, &thiz->oinfo, obuf, GST_MAP_READWRITE))
@@ -264,7 +264,7 @@ gst_alpha_mask_convert (GstAlphaMask * thiz, GstBuffer * ibuf)
     goto beach;
 
   if (!gst_video_frame_map (&aframe, &thiz->ainfo, thiz->alpha_buffer,
-          GST_MAP_READWRITE)) {
+          GST_MAP_READ)) {
     GST_DEBUG_OBJECT (thiz, "received invalid buffer");
   } else {
     if (thiz->oformat == GST_VIDEO_FORMAT_A420)
@@ -378,12 +378,14 @@ gst_alpha_mask_push_frame (GstAlphaMask * thiz, GstBuffer * ibuffer)
 
   switch (thiz->oformat) {
     case GST_VIDEO_FORMAT_A420:
-      if (thiz->iformat == GST_VIDEO_FORMAT_I420) {
+      if (thiz->iformat == GST_VIDEO_FORMAT_GRAY8) {
         GstMemory *mem = gst_buffer_peek_memory (thiz->alpha_buffer, 0);
         obuffer = gst_buffer_make_writable (ibuffer);
         gst_buffer_append_memory (obuffer, gst_memory_ref (mem));
-        break;
+      } else {
+        obuffer = gst_alpha_mask_convert (thiz, ibuffer);
       }
+      break;
     case GST_VIDEO_FORMAT_ARGB:
     case GST_VIDEO_FORMAT_AYUV:
       obuffer = gst_alpha_mask_convert (thiz, ibuffer);
