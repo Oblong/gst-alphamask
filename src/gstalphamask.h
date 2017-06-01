@@ -58,8 +58,10 @@ struct _GstAlphaMask {
     gboolean                 alpha_linked;
     gboolean                 video_flushing;
     gboolean                 video_eos;
+    gboolean                 video_segment_done;
     gboolean                 alpha_flushing;
     gboolean                 alpha_eos;
+    gboolean                 alpha_segment_done;
 
     GMutex                   lock;
     GCond                    cond;  /* to signal removal of a queued alpha
