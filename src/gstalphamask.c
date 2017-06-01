@@ -526,7 +526,7 @@ wait_for_alpha_buf:
           GST_FORMAT_TIME, alpha_end);
     }
 
-    GST_LOG_OBJECT (thiz, "T: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
+    GST_LOG_OBJECT (thiz, "A: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
         GST_TIME_ARGS (alpha_running_time),
         GST_TIME_ARGS (alpha_running_time_end));
     GST_LOG_OBJECT (thiz, "V: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
@@ -563,7 +563,7 @@ wait_for_alpha_buf:
   } else {
     gboolean wait_for_alpha_buf = TRUE;
 
-    if (thiz->alpha_eos)
+    if (thiz->alpha_eos || thiz->alpha_segment_done)
       wait_for_alpha_buf = FALSE;
 
     /* Alpha pad linked, but no alpha buffer available - what now? */
@@ -690,11 +690,16 @@ gst_alpha_mask_video_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
       GST_DEBUG_OBJECT (thiz, "received new segment");
 
+      GST_ALPHA_MASK_LOCK (thiz);
+      thiz->video_eos = FALSE;
+      thiz->video_segment_done = FALSE;
+      GST_ALPHA_MASK_UNLOCK (thiz);
+
       gst_event_parse_segment (event, &segment);
 
       if (segment->format == GST_FORMAT_TIME) {
         gst_segment_copy_into (segment, &thiz->segment);
-        GST_DEBUG_OBJECT (thiz, "VIDEO SEGMENT now: %" GST_SEGMENT_FORMAT,
+        GST_INFO_OBJECT (thiz, "VIDEO SEGMENT now: %" GST_SEGMENT_FORMAT,
             &thiz->segment);
       } else {
         GST_ELEMENT_WARNING (thiz, STREAM, MUX, (NULL),
@@ -711,6 +716,13 @@ gst_alpha_mask_video_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_ALPHA_MASK_UNLOCK (thiz);
       ret = gst_pad_event_default (pad, parent, event);
       break;
+    case GST_EVENT_SEGMENT_DONE:
+      GST_ALPHA_MASK_LOCK (thiz);
+      GST_INFO_OBJECT (thiz, "video segment-done");
+      thiz->video_segment_done = TRUE;
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      ret = gst_pad_event_default (pad, parent, event);
+      break;
     case GST_EVENT_FLUSH_START:
       GST_ALPHA_MASK_LOCK (thiz);
       GST_INFO_OBJECT (thiz, "video flush start");
@@ -724,6 +736,7 @@ gst_alpha_mask_video_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_INFO_OBJECT (thiz, "video flush stop");
       thiz->video_flushing = FALSE;
       thiz->video_eos = FALSE;
+      thiz->video_segment_done = FALSE;
       gst_segment_init (&thiz->segment, GST_FORMAT_TIME);
       GST_ALPHA_MASK_UNLOCK (thiz);
       ret = gst_pad_event_default (pad, parent, event);
@@ -871,14 +884,17 @@ gst_alpha_mask_alpha_event (GstPad * pad, GstObject * parent, GstEvent * event)
     {
       const GstSegment *segment;
 
+      GST_ALPHA_MASK_LOCK (thiz);
       thiz->alpha_eos = FALSE;
+      thiz->alpha_segment_done = FALSE;
+      GST_ALPHA_MASK_UNLOCK (thiz);
 
       gst_event_parse_segment (event, &segment);
 
       if (segment->format == GST_FORMAT_TIME) {
         GST_ALPHA_MASK_LOCK (thiz);
         gst_segment_copy_into (segment, &thiz->alpha_segment);
-        GST_DEBUG_OBJECT (thiz, "ALPHA SEGMENT now: %" GST_SEGMENT_FORMAT,
+        GST_INFO_OBJECT (thiz, "ALPHA SEGMENT now: %" GST_SEGMENT_FORMAT,
             &thiz->alpha_segment);
         GST_ALPHA_MASK_UNLOCK (thiz);
       } else {
@@ -922,6 +938,7 @@ gst_alpha_mask_alpha_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_INFO_OBJECT (thiz, "alpha flush stop");
       thiz->alpha_flushing = FALSE;
       thiz->alpha_eos = FALSE;
+      thiz->alpha_segment_done = FALSE;
       gst_alpha_mask_pop_alpha (thiz);
       gst_segment_init (&thiz->alpha_segment, GST_FORMAT_TIME);
       GST_ALPHA_MASK_UNLOCK (thiz);
@@ -932,6 +949,17 @@ gst_alpha_mask_alpha_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_ALPHA_MASK_LOCK (thiz);
       GST_INFO_OBJECT (thiz, "alpha flush start");
       thiz->alpha_flushing = TRUE;
+      GST_ALPHA_MASK_BROADCAST (thiz);
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      gst_event_unref (event);
+      ret = TRUE;
+      break;
+    case GST_EVENT_SEGMENT_DONE:
+      GST_ALPHA_MASK_LOCK (thiz);
+      thiz->alpha_segment_done = TRUE;
+      GST_INFO_OBJECT (thiz, "alpha segment-done");
+      /* wake up the video chain, it might be waiting for a alpha buffer or
+       * a alpha segment update */
       GST_ALPHA_MASK_BROADCAST (thiz);
       GST_ALPHA_MASK_UNLOCK (thiz);
       gst_event_unref (event);
@@ -993,6 +1021,12 @@ gst_alpha_mask_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
   gboolean ret;
 
   thiz = GST_ALPHA_MASK (parent);
+
+  /* Drop QOS events to ensure we get both streams completely merged */
+  if (GST_EVENT_TYPE (event) == GST_EVENT_QOS) {
+    gst_event_unref (event);
+    return TRUE;
+  }
 
   if (thiz->alpha_linked) {
     gst_event_ref (event);
