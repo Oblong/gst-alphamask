@@ -542,10 +542,11 @@ wait_for_alpha_buf:
       GST_ALPHA_MASK_UNLOCK (thiz);
       goto wait_for_alpha_buf;
     } else if (valid_alpha_time && vid_running_time_end <= alpha_running_time) {
-      GST_LOG_OBJECT (thiz, "alpha in future, pushing video buffer");
+      GST_WARNING_OBJECT (thiz, "alpha in future, dropping video buffer");
       GST_ALPHA_MASK_UNLOCK (thiz);
-      /* Push the video frame */
-      ret = gst_alpha_mask_push_frame (thiz, buffer);
+      /* Drop the video frame */
+      gst_buffer_unref (buffer);
+      ret = GST_FLOW_OK;
     } else {
       GST_ALPHA_MASK_UNLOCK (thiz);
       ret = gst_alpha_mask_push_frame (thiz, buffer);
@@ -887,6 +888,7 @@ gst_alpha_mask_alpha_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_ALPHA_MASK_LOCK (thiz);
       thiz->alpha_eos = FALSE;
       thiz->alpha_segment_done = FALSE;
+      gst_alpha_mask_pop_alpha (thiz);
       GST_ALPHA_MASK_UNLOCK (thiz);
 
       gst_event_parse_segment (event, &segment);
