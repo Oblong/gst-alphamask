@@ -489,123 +489,116 @@ wait_for_alpha_buf:
   if (thiz->video_eos)
     goto have_eos;
 
-  /* Alpha pad not linked, just pass-trough */
-  if (!thiz->alpha_linked) {
-    GST_ALPHA_MASK_UNLOCK (thiz);
-    /* Push the video frame */
-    ret = gst_alpha_mask_push_frame (thiz, buffer);
-  } else {
-    /* Alpha pad linked, check if we have a alpha buffer queued */
-    if (thiz->alpha_buffer) {
-      gboolean pop_alpha = FALSE, valid_alpha_time = TRUE;
-      GstClockTime alpha_start = GST_CLOCK_TIME_NONE;
-      GstClockTime alpha_end = GST_CLOCK_TIME_NONE;
-      GstClockTime alpha_running_time = GST_CLOCK_TIME_NONE;
-      GstClockTime alpha_running_time_end = GST_CLOCK_TIME_NONE;
-      GstClockTime vid_running_time, vid_running_time_end;
+  /* Check if we have a alpha buffer queued */
+  if (thiz->alpha_buffer) {
+    gboolean pop_alpha = FALSE, valid_alpha_time = TRUE;
+    GstClockTime alpha_start = GST_CLOCK_TIME_NONE;
+    GstClockTime alpha_end = GST_CLOCK_TIME_NONE;
+    GstClockTime alpha_running_time = GST_CLOCK_TIME_NONE;
+    GstClockTime alpha_running_time_end = GST_CLOCK_TIME_NONE;
+    GstClockTime vid_running_time, vid_running_time_end;
 
-      /* if the alpha buffer isn't stamped right, pop it off the
-       * queue and display it for the current video frame only */
-      if (!GST_BUFFER_TIMESTAMP_IS_VALID (thiz->alpha_buffer) ||
-          !GST_BUFFER_DURATION_IS_VALID (thiz->alpha_buffer)) {
-        GST_WARNING_OBJECT (thiz,
-            "Got alpha buffer with invalid timestamp or duration");
+    /* if the alpha buffer isn't stamped right, pop it off the
+     * queue and display it for the current video frame only */
+    if (!GST_BUFFER_TIMESTAMP_IS_VALID (thiz->alpha_buffer) ||
+        !GST_BUFFER_DURATION_IS_VALID (thiz->alpha_buffer)) {
+      GST_WARNING_OBJECT (thiz,
+          "Got alpha buffer with invalid timestamp or duration");
+      pop_alpha = TRUE;
+      valid_alpha_time = FALSE;
+    } else {
+      alpha_start = GST_BUFFER_TIMESTAMP (thiz->alpha_buffer);
+      alpha_end = alpha_start + GST_BUFFER_DURATION (thiz->alpha_buffer);
+    }
+
+    vid_running_time =
+        gst_segment_to_running_time (&thiz->segment, GST_FORMAT_TIME, start);
+    vid_running_time_end =
+        gst_segment_to_running_time (&thiz->segment, GST_FORMAT_TIME, stop);
+
+    /* If timestamp and duration are valid */
+    if (valid_alpha_time) {
+      alpha_running_time =
+          gst_segment_to_running_time (&thiz->alpha_segment,
+          GST_FORMAT_TIME, alpha_start);
+      alpha_running_time_end =
+          gst_segment_to_running_time (&thiz->alpha_segment,
+          GST_FORMAT_TIME, alpha_end);
+    }
+
+    GST_LOG_OBJECT (thiz, "T: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (alpha_running_time),
+        GST_TIME_ARGS (alpha_running_time_end));
+    GST_LOG_OBJECT (thiz, "V: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (vid_running_time),
+        GST_TIME_ARGS (vid_running_time_end));
+
+    /* Alpha too old or in the future */
+    if (valid_alpha_time && alpha_running_time_end <= vid_running_time) {
+      /* alpha buffer too old, get rid of it and do nothing  */
+      GST_LOG_OBJECT (thiz, "alpha buffer too old, popping");
+      pop_alpha = FALSE;
+      gst_alpha_mask_pop_alpha (thiz);
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      goto wait_for_alpha_buf;
+    } else if (valid_alpha_time && vid_running_time_end <= alpha_running_time) {
+      GST_LOG_OBJECT (thiz, "alpha in future, pushing video buffer");
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      /* Push the video frame */
+      ret = gst_alpha_mask_push_frame (thiz, buffer);
+    } else {
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      ret = gst_alpha_mask_push_frame (thiz, buffer);
+
+      if (valid_alpha_time && alpha_running_time_end <= vid_running_time_end) {
+        GST_LOG_OBJECT (thiz, "alpha buffer not needed any longer");
         pop_alpha = TRUE;
-        valid_alpha_time = FALSE;
-      } else {
-        alpha_start = GST_BUFFER_TIMESTAMP (thiz->alpha_buffer);
-        alpha_end = alpha_start + GST_BUFFER_DURATION (thiz->alpha_buffer);
       }
+    }
+    if (pop_alpha) {
+      GST_ALPHA_MASK_LOCK (thiz);
+      gst_alpha_mask_pop_alpha (thiz);
+      GST_ALPHA_MASK_UNLOCK (thiz);
+    }
+  } else {
+    gboolean wait_for_alpha_buf = TRUE;
+
+    if (thiz->alpha_eos)
+      wait_for_alpha_buf = FALSE;
+
+    /* Alpha pad linked, but no alpha buffer available - what now? */
+    if (thiz->alpha_segment.format == GST_FORMAT_TIME) {
+      GstClockTime alpha_start_running_time, alpha_position_running_time;
+      GstClockTime vid_running_time;
 
       vid_running_time =
-          gst_segment_to_running_time (&thiz->segment, GST_FORMAT_TIME, start);
-      vid_running_time_end =
-          gst_segment_to_running_time (&thiz->segment, GST_FORMAT_TIME, stop);
+          gst_segment_to_running_time (&thiz->segment, GST_FORMAT_TIME,
+          GST_BUFFER_TIMESTAMP (buffer));
+      alpha_start_running_time =
+          gst_segment_to_running_time (&thiz->alpha_segment,
+          GST_FORMAT_TIME, thiz->alpha_segment.start);
+      alpha_position_running_time =
+          gst_segment_to_running_time (&thiz->alpha_segment,
+          GST_FORMAT_TIME, thiz->alpha_segment.position);
 
-      /* If timestamp and duration are valid */
-      if (valid_alpha_time) {
-        alpha_running_time =
-            gst_segment_to_running_time (&thiz->alpha_segment,
-            GST_FORMAT_TIME, alpha_start);
-        alpha_running_time_end =
-            gst_segment_to_running_time (&thiz->alpha_segment,
-            GST_FORMAT_TIME, alpha_end);
-      }
-
-      GST_LOG_OBJECT (thiz, "T: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
-          GST_TIME_ARGS (alpha_running_time),
-          GST_TIME_ARGS (alpha_running_time_end));
-      GST_LOG_OBJECT (thiz, "V: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
-          GST_TIME_ARGS (vid_running_time),
-          GST_TIME_ARGS (vid_running_time_end));
-
-      /* Alpha too old or in the future */
-      if (valid_alpha_time && alpha_running_time_end <= vid_running_time) {
-        /* alpha buffer too old, get rid of it and do nothing  */
-        GST_LOG_OBJECT (thiz, "alpha buffer too old, popping");
-        pop_alpha = FALSE;
-        gst_alpha_mask_pop_alpha (thiz);
-        GST_ALPHA_MASK_UNLOCK (thiz);
-        goto wait_for_alpha_buf;
-      } else if (valid_alpha_time && vid_running_time_end <= alpha_running_time) {
-        GST_LOG_OBJECT (thiz, "alpha in future, pushing video buffer");
-        GST_ALPHA_MASK_UNLOCK (thiz);
-        /* Push the video frame */
-        ret = gst_alpha_mask_push_frame (thiz, buffer);
-      } else {
-        GST_ALPHA_MASK_UNLOCK (thiz);
-        ret = gst_alpha_mask_push_frame (thiz, buffer);
-
-        if (valid_alpha_time && alpha_running_time_end <= vid_running_time_end) {
-          GST_LOG_OBJECT (thiz, "alpha buffer not needed any longer");
-          pop_alpha = TRUE;
-        }
-      }
-      if (pop_alpha) {
-        GST_ALPHA_MASK_LOCK (thiz);
-        gst_alpha_mask_pop_alpha (thiz);
-        GST_ALPHA_MASK_UNLOCK (thiz);
-      }
-    } else {
-      gboolean wait_for_alpha_buf = TRUE;
-
-      if (thiz->alpha_eos)
+      if ((GST_CLOCK_TIME_IS_VALID (alpha_start_running_time) &&
+              vid_running_time < alpha_start_running_time) ||
+          (GST_CLOCK_TIME_IS_VALID (alpha_position_running_time) &&
+              vid_running_time < alpha_position_running_time)) {
         wait_for_alpha_buf = FALSE;
-
-      /* Alpha pad linked, but no alpha buffer available - what now? */
-      if (thiz->alpha_segment.format == GST_FORMAT_TIME) {
-        GstClockTime alpha_start_running_time, alpha_position_running_time;
-        GstClockTime vid_running_time;
-
-        vid_running_time =
-            gst_segment_to_running_time (&thiz->segment, GST_FORMAT_TIME,
-            GST_BUFFER_TIMESTAMP (buffer));
-        alpha_start_running_time =
-            gst_segment_to_running_time (&thiz->alpha_segment,
-            GST_FORMAT_TIME, thiz->alpha_segment.start);
-        alpha_position_running_time =
-            gst_segment_to_running_time (&thiz->alpha_segment,
-            GST_FORMAT_TIME, thiz->alpha_segment.position);
-
-        if ((GST_CLOCK_TIME_IS_VALID (alpha_start_running_time) &&
-                vid_running_time < alpha_start_running_time) ||
-            (GST_CLOCK_TIME_IS_VALID (alpha_position_running_time) &&
-                vid_running_time < alpha_position_running_time)) {
-          wait_for_alpha_buf = FALSE;
-        }
       }
+    }
 
-      if (wait_for_alpha_buf) {
-        GST_DEBUG_OBJECT (thiz, "no alpha buffer, need to wait for one");
-        GST_ALPHA_MASK_WAIT (thiz);
-        GST_DEBUG_OBJECT (thiz, "resuming");
-        GST_ALPHA_MASK_UNLOCK (thiz);
-        goto wait_for_alpha_buf;
-      } else {
-        GST_ALPHA_MASK_UNLOCK (thiz);
-        GST_LOG_OBJECT (thiz, "no need to wait for a alpha buffer");
-        ret = gst_pad_push (thiz->srcpad, buffer);
-      }
+    if (wait_for_alpha_buf) {
+      GST_DEBUG_OBJECT (thiz, "no alpha buffer, need to wait for one");
+      GST_ALPHA_MASK_WAIT (thiz);
+      GST_DEBUG_OBJECT (thiz, "resuming");
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      goto wait_for_alpha_buf;
+    } else {
+      GST_ALPHA_MASK_UNLOCK (thiz);
+      GST_LOG_OBJECT (thiz, "no need to wait for a alpha buffer");
+      ret = gst_pad_push (thiz->srcpad, buffer);
     }
   }
 
@@ -700,10 +693,9 @@ gst_alpha_mask_video_event (GstPad * pad, GstObject * parent, GstEvent * event)
       gst_event_parse_segment (event, &segment);
 
       if (segment->format == GST_FORMAT_TIME) {
+        gst_segment_copy_into (segment, &thiz->segment);
         GST_DEBUG_OBJECT (thiz, "VIDEO SEGMENT now: %" GST_SEGMENT_FORMAT,
             &thiz->segment);
-
-        gst_segment_copy_into (segment, &thiz->segment);
       } else {
         GST_ELEMENT_WARNING (thiz, STREAM, MUX, (NULL),
             ("received non-TIME newsegment event on video input"));
@@ -795,9 +787,11 @@ gst_alpha_mask_alpha_chain (GstPad * pad, GstObject * parent,
   }
 
   if (in_seg) {
+    /* about to change metadata */
+    buffer = gst_buffer_make_writable (buffer);
     if (GST_BUFFER_TIMESTAMP_IS_VALID (buffer))
       GST_BUFFER_TIMESTAMP (buffer) = clip_start;
-    else if (GST_BUFFER_DURATION_IS_VALID (buffer))
+    if (GST_BUFFER_DURATION_IS_VALID (buffer))
       GST_BUFFER_DURATION (buffer) = clip_stop - clip_start;
 
     /* Wait for the previous buffer to go away */
