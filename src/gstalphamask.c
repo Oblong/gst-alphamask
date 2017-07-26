@@ -707,6 +707,11 @@ gst_alpha_mask_video_event (GstPad * pad, GstObject * parent, GstEvent * event)
             ("received non-TIME newsegment event on video input"));
       }
 
+      /* Drop any older alpha buffer to ensure we get both streams in sync */
+      GST_ALPHA_MASK_LOCK (thiz);
+      gst_alpha_mask_pop_alpha (thiz);
+      GST_ALPHA_MASK_UNLOCK (thiz);
+
       ret = gst_pad_event_default (pad, parent, event);
       break;
     }
@@ -888,7 +893,6 @@ gst_alpha_mask_alpha_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_ALPHA_MASK_LOCK (thiz);
       thiz->alpha_eos = FALSE;
       thiz->alpha_segment_done = FALSE;
-      gst_alpha_mask_pop_alpha (thiz);
       GST_ALPHA_MASK_UNLOCK (thiz);
 
       gst_event_parse_segment (event, &segment);
