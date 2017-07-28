@@ -1,7 +1,7 @@
 dnl required version of autoconf
 AC_PREREQ([2.53])
 
-AC_INIT([gst-alphamask],[1.0.1])
+AC_INIT([gst-alphamask],[1.0.2])
 
 dnl required versions of gstreamer and plugins-base
 GST_REQUIRED=1.6.0
